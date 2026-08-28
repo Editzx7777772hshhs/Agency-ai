@@ -3,25 +3,27 @@ import { requireUser, AuthError } from '../_shared/auth.ts'
 import { generateStructuredJSON, AiError } from '../_shared/ai.ts'
 import { logUsage } from '../_shared/usage.ts'
 
-interface ScriptResult {
-  title: string
-  hook: string
-  body: string
-  cta: string
-  ending: string
-  visualSuggestions: string[]
+interface Scene {
+  timestamp: string
+  narration: string
+  visual: string
+  broll: string
+  onScreenText: string
+  transition: string
 }
 
-function isScriptResult(v: unknown): v is ScriptResult {
+function isBlueprintResult(v: unknown): v is { scenes: Scene[] } {
   if (typeof v !== 'object' || v === null) return false
   const r = v as any
-  return (
-    typeof r.title === 'string' &&
-    typeof r.hook === 'string' &&
-    typeof r.body === 'string' &&
-    typeof r.cta === 'string' &&
-    typeof r.ending === 'string' &&
-    Array.isArray(r.visualSuggestions)
+  if (!Array.isArray(r.scenes) || r.scenes.length === 0) return false
+  return r.scenes.every(
+    (s: any) =>
+      typeof s.timestamp === 'string' &&
+      typeof s.narration === 'string' &&
+      typeof s.visual === 'string' &&
+      typeof s.broll === 'string' &&
+      typeof s.onScreenText === 'string' &&
+      typeof s.transition === 'string'
   )
 }
 
@@ -31,29 +33,29 @@ Deno.serve(async (req) => {
 
   try {
     const { supabase, user } = await requireUser(req)
-    const { ideaTitle, ideaHook, ideaAngle, duration, platform, tone } = await req.json()
+    const { script } = await req.json()
 
-    if (!ideaTitle || typeof ideaTitle !== 'string') {
-      return errorResponse('A content idea/title is required.')
+    if (!script || typeof script !== 'string') {
+      return errorResponse('A script is required to build a blueprint.')
     }
 
-    const result = await generateStructuredJSON<ScriptResult>({
+    const result = await generateStructuredJSON<{ scenes: Scene[] }>({
       system:
-        'You are the VANTA AI script agent. Write a full, ready-to-record script matching the requested duration, ' +
-        'platform and tone, including pattern interrupts inside the body for retention. Return an object with: ' +
-        'title (string), hook (string, strong opener), body (string, the main content including intro and pattern ' +
-        'interrupts, written as spoken narration), cta (string), ending (string), visualSuggestions (string[], ' +
-        '3-6 concrete on-screen visual cues timed to the script).',
-      prompt: `Idea: ${ideaTitle}\nHook idea: ${ideaHook || 'none given — write one'}\nAngle: ${ideaAngle || 'not specified'}\nDuration target: ${duration || '30 seconds'}\nPlatform: ${platform || 'not specified'}\nTone: ${tone || 'not specified'}`,
-      validate: isScriptResult,
+        'You are the VANTA AI video blueprint agent. VANTA does not auto-render video — you produce a scene-by-scene ' +
+        'production plan a human editor can follow. Return an object { "scenes": [...] } where each scene has: ' +
+        'timestamp (string, e.g. "0-3 sec"), narration (string, matching that portion of the script), ' +
+        'visual (string, on-camera/primary visual suggestion), broll (string, supporting b-roll suggestion), ' +
+        'onScreenText (string, any text overlay, or "" if none), transition (string, cut/transition into the next scene).',
+      prompt: `Script:\n${script.slice(0, 6000)}\n\nBreak this into 5-10 scenes covering the full script.`,
+      validate: isBlueprintResult,
       maxTokens: 2500,
     })
 
-    await logUsage(supabase, user.id, 'generate-script')
+    await logUsage(supabase, user.id, 'generate-video-blueprint')
     return jsonResponse(result)
   } catch (err) {
     if (err instanceof AuthError) return errorResponse(err.message, 401)
     if (err instanceof AiError) return errorResponse(err.message, err.status)
-    return errorResponse('Unexpected error while generating the script.', 500)
+    return errorResponse('Unexpected error while generating the blueprint.', 500)
   }
 })
