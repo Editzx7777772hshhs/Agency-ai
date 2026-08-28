@@ -3,25 +3,25 @@ import { requireUser, AuthError } from '../_shared/auth.ts'
 import { generateStructuredJSON, AiError } from '../_shared/ai.ts'
 import { logUsage } from '../_shared/usage.ts'
 
-interface MetadataResult {
-  titles: string[]
-  description: string
-  hashtags: string[]
-  keywords: string[]
-  thumbnailText: string
-  thumbnailConcept: string
+interface ScriptResult {
+  title: string
+  hook: string
+  body: string
+  cta: string
+  ending: string
+  visualSuggestions: string[]
 }
 
-function isMetadataResult(v: unknown): v is MetadataResult {
+function isScriptResult(v: unknown): v is ScriptResult {
   if (typeof v !== 'object' || v === null) return false
   const r = v as any
   return (
-    Array.isArray(r.titles) &&
-    typeof r.description === 'string' &&
-    Array.isArray(r.hashtags) &&
-    Array.isArray(r.keywords) &&
-    typeof r.thumbnailText === 'string' &&
-    typeof r.thumbnailConcept === 'string'
+    typeof r.title === 'string' &&
+    typeof r.hook === 'string' &&
+    typeof r.body === 'string' &&
+    typeof r.cta === 'string' &&
+    typeof r.ending === 'string' &&
+    Array.isArray(r.visualSuggestions)
   )
 }
 
@@ -31,28 +31,29 @@ Deno.serve(async (req) => {
 
   try {
     const { supabase, user } = await requireUser(req)
-    const { scriptText, platform, topic } = await req.json()
+    const { ideaTitle, ideaHook, ideaAngle, duration, platform, tone } = await req.json()
 
-    if (!scriptText && !topic) {
-      return errorResponse('A script or topic is required.')
+    if (!ideaTitle || typeof ideaTitle !== 'string') {
+      return errorResponse('A content idea/title is required.')
     }
 
-    const result = await generateStructuredJSON<MetadataResult>({
+    const result = await generateStructuredJSON<ScriptResult>({
       system:
-        'You are the VANTA AI metadata agent. Return an object with: titles (string[], exactly 5 click-worthy but ' +
-        'non-clickbait options), description (string, platform-appropriate length), hashtags (string[], 8-15 relevant ' +
-        'tags without the # symbol), keywords (string[], 8-12 SEO keywords/phrases), thumbnailText (string, <=5 words ' +
-        'of bold on-thumbnail text), thumbnailConcept (string, a concrete visual description an editor could design from).',
-      prompt: `Platform: ${platform || 'not specified'}\nTopic: ${topic || 'derive from script'}\nScript:\n${(scriptText || '').slice(0, 6000) || '(no script provided — use topic only)'}`,
-      validate: isMetadataResult,
-      maxTokens: 1800,
+        'You are the VANTA AI script agent. Write a full, ready-to-record script matching the requested duration, ' +
+        'platform and tone, including pattern interrupts inside the body for retention. Return an object with: ' +
+        'title (string), hook (string, strong opener), body (string, the main content including intro and pattern ' +
+        'interrupts, written as spoken narration), cta (string), ending (string), visualSuggestions (string[], ' +
+        '3-6 concrete on-screen visual cues timed to the script).',
+      prompt: `Idea: ${ideaTitle}\nHook idea: ${ideaHook || 'none given — write one'}\nAngle: ${ideaAngle || 'not specified'}\nDuration target: ${duration || '30 seconds'}\nPlatform: ${platform || 'not specified'}\nTone: ${tone || 'not specified'}`,
+      validate: isScriptResult,
+      maxTokens: 2500,
     })
 
-    await logUsage(supabase, user.id, 'generate-metadata')
+    await logUsage(supabase, user.id, 'generate-script')
     return jsonResponse(result)
   } catch (err) {
     if (err instanceof AuthError) return errorResponse(err.message, 401)
     if (err instanceof AiError) return errorResponse(err.message, err.status)
-    return errorResponse('Unexpected error while generating metadata.', 500)
+    return errorResponse('Unexpected error while generating the script.', 500)
   }
 })
