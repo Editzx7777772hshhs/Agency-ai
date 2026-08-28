@@ -3,23 +3,27 @@ import { requireUser, AuthError } from '../_shared/auth.ts'
 import { generateStructuredJSON, AiError } from '../_shared/ai.ts'
 import { logUsage } from '../_shared/usage.ts'
 
-interface AnalysisResult {
-  whatWorked: string[]
-  whatDidNotWork: string[]
-  possibleReasons: string[]
-  improvements: string[]
-  nextTopics: string[]
+interface Idea {
+  title: string
+  hook: string
+  angle: string
+  targetEmotion: string
+  score: number
+  format: string
 }
 
-function isAnalysisResult(v: unknown): v is AnalysisResult {
+function isIdeasResult(v: unknown): v is { ideas: Idea[] } {
   if (typeof v !== 'object' || v === null) return false
   const r = v as any
-  return (
-    Array.isArray(r.whatWorked) &&
-    Array.isArray(r.whatDidNotWork) &&
-    Array.isArray(r.possibleReasons) &&
-    Array.isArray(r.improvements) &&
-    Array.isArray(r.nextTopics)
+  if (!Array.isArray(r.ideas) || r.ideas.length === 0) return false
+  return r.ideas.every(
+    (i: any) =>
+      typeof i.title === 'string' &&
+      typeof i.hook === 'string' &&
+      typeof i.angle === 'string' &&
+      typeof i.targetEmotion === 'string' &&
+      typeof i.score === 'number' &&
+      typeof i.format === 'string'
   )
 }
 
@@ -29,36 +33,30 @@ Deno.serve(async (req) => {
 
   try {
     const { supabase, user } = await requireUser(req)
-    const { entries } = await req.json()
+    const { niche, platform, audience, tone, count } = await req.json()
 
-    if (!Array.isArray(entries) || entries.length === 0) {
-      return errorResponse('At least one performance entry is required.')
+    if (!niche || typeof niche !== 'string') {
+      return errorResponse('Project niche is required.')
     }
 
-    // Only ever pass numbers the user explicitly logged — the AI is told
-    // plainly that this is the entire dataset, so it never implies it has
-    // pulled real platform analytics on its own.
-    const summarized = entries
-      .slice(0, 20)
-      .map((e: any, i: number) => `Entry ${i + 1}: views=${e.views ?? 0}, likes=${e.likes ?? 0}, comments=${e.comments ?? 0}, shares=${e.shares ?? 0}, watch_time=${e.watch_time ?? 0}`)
-      .join('\n')
+    const n = Math.min(Math.max(Number(count) || 10, 1), 10)
 
-    const result = await generateStructuredJSON<AnalysisResult>({
+    const result = await generateStructuredJSON<{ ideas: Idea[] }>({
       system:
-        'You are the VANTA AI analytics agent. You only ever see numbers the creator manually logged — you have no ' +
-        'access to their real platform dashboard, so never claim to know anything beyond the entries given. Return ' +
-        'an object with: whatWorked (string[]), whatDidNotWork (string[]), possibleReasons (string[]), ' +
-        'improvements (string[]), nextTopics (string[]). Base every point strictly on the provided numbers.',
-      prompt: `User-logged performance entries (this is the complete dataset — nothing else is available):\n${summarized}`,
-      validate: isAnalysisResult,
-      maxTokens: 1800,
+        'You are the VANTA AI content idea agent. Generate distinct, non-repetitive content ideas tailored to the ' +
+        'niche, platform, audience and tone given. Return an object { "ideas": [...] } where each idea has: ' +
+        'title (string), hook (string, first line spoken/shown), angle (string), targetEmotion (string, e.g. curiosity, ' +
+        'nostalgia, urgency), score (integer 0-100 estimating engagement potential), format (one of "short","long","carousel","live").',
+      prompt: `Niche: ${niche}\nPlatform: ${platform || 'not specified'}\nAudience: ${audience || 'not specified'}\nTone: ${tone || 'not specified'}\n\nGenerate exactly ${n} ideas.`,
+      validate: isIdeasResult,
+      maxTokens: 2500,
     })
 
-    await logUsage(supabase, user.id, 'analyze-analytics')
+    await logUsage(supabase, user.id, 'generate-ideas')
     return jsonResponse(result)
   } catch (err) {
     if (err instanceof AuthError) return errorResponse(err.message, 401)
     if (err instanceof AiError) return errorResponse(err.message, err.status)
-    return errorResponse('Unexpected error while analyzing performance.', 500)
+    return errorResponse('Unexpected error while generating ideas.', 500)
   }
 })
